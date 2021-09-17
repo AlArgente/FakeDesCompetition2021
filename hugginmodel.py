@@ -23,7 +23,7 @@ class HugginFaceModel:
         """Function that reads data from csv
         :return: load train, test data to class
         """
-        self.__train, self.__test = load_data_xlsx(self.__train_path, self.__test_path)
+        self.__train, self.__test = load_data_by_extension(self.__train_path, self.__test_path)
         if self.__test is None:
             self.__train, self.__test = split_train_test(self.__train)
 
@@ -37,23 +37,43 @@ class HugginFaceModel:
         # Get text
         train_text = self.__train['Text'].to_list()
         test_text = self.__test['Text'].to_list()
-        self.__y_train = self.__train['Category']
-        self.__y_test = self.__test['Category']
+        classes = {'Fake':0, 'True':1}
+        self.__y_train = [classes[c] for c in self.__train.Category]
+        self.__y_train = tf.keras.utils.to_categorical(self.__y_train, num_classes=2)
+        self.__y_test = [classes[c] for c in self.__test.Category]
+        self.__y_test = tf.keras.utils.to_categorical(self.__y_test, num_classes=2)
 
         # Prepare encodings
-        train_encodings = self.__tokenizer(train_text, truncation=True, padding=True, max_length=self.__max_seq_length)
-        test_encoddings = self.__tokenizer(test_text, truncation=True, padding=True)
+        # train_encodings = self.__tokenizer(train_text, truncation=True, padding=True, max_length=self.__max_seq_length)
+        train_encodings = self.__tokenizer.encode_plus(train_text, max_length=self.__max_seq_length,
+                                                        add_special_token=True, # ADD [CLS] and [SEP]
+                                                        return_token_type_ids=False,
+                                                        pad_to_max_length=True,
+                                                        return_attention_mask=True,
+                                                        return_tensors='tf' # Return tf tensors
+                                                        )
+        # test_encoddings = self.__tokenizer(test_text, truncation=True, padding=True)
+        test_encoddings = self.__tokenizer.encode_plus(test_text, max_length=self.__max_seq_length,
+                                                        add_special_token=True, # ADD [CLS] and [SEP]
+                                                        return_token_type_ids=False,
+                                                        pad_to_max_length=True,
+                                                        return_attention_mask=True,
+                                                        return_tensors='tf' # Return tf tensors
+                                                        )
 
         # Prepare tensorflow datasets
         self.__train_dataset = tf.data.Dataset.from_tensor_slices((
             dict(train_encodings),
             self.__y_train
         ))
+        self.__train_dataset.shuffle(len(self.__train)).batch(self.__batch_size)
 
         self.__test_dataset = tf.data.Dataset.from_tensor_slices((
             dict(test_encoddings),
             self.__y_test
         ))
+
+        self.__test_dataset.shuffle(len(self.__test)).batch(self.__batch_size)
 
     def __fit(self):
         if self.__use_trainer:
@@ -82,7 +102,8 @@ class HugginFaceModel:
         self.__trainer = TFTrainer(
             model=self.__model,
             args=self.__training_args,
-            train_dataset=self.__train_dataset
+            train_dataset=self.__train_dataset,
+            eval_dataset=self.__test_dataset
         )
         # Train
         self.__trainer.train()
@@ -98,7 +119,8 @@ class HugginFaceModel:
         self.__config = AutoConfig.from_pretrained(self.__model_name,
                                                    num_labels = 2,
                                                    label2id = (0, 1),
-                                                   finetuning_tasks = 'text-classification')
+                                                   finetuning_tasks = 'text-classification',
+                                                   output_attentions=True)
 
         self.__model = TFAutoModelForSequenceClassification.from_pretrained(self.__model_name,
                                                                             config=self.__config)
